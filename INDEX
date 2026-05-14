@@ -139,6 +139,14 @@
       background:#fff;
       padding:12px;
       height:280px;
+      position:relative;
+    }
+    .chart-fallback{
+      position:absolute; inset:0;
+      display:none;
+      align-items:center; justify-content:center;
+      color:var(--muted); font-size:12px;
+      padding:12px; text-align:center;
     }
 
     .table-card{margin-top:16px}
@@ -305,6 +313,10 @@
           <div class="chart-wrap">
             <div style="font-size:13px;font-weight:600;margin-bottom:8px;">투자비 잔액 추이(월)</div>
             <canvas id="chart" style="width:100%;height:220px;"></canvas>
+            <div class="chart-fallback" id="chartFallback">
+              차트 라이브러리(Chart.js) 로딩에 실패했습니다.<br/>
+              사내망/보안/광고차단으로 CDN이 막혔을 수 있어요.
+            </div>
           </div>
         </div>
       </section>
@@ -350,375 +362,381 @@
     </section>
   </div>
 
-  <!-- 외부 라이브러리 (CDN) -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/gh/gitbrent/pptxgenjs/dist/pptxgen.bundle.js"></script>
+  <!-- 외부 라이브러리 (CDN) : defer로 DOM 준비 후 로딩/실행 -->
+  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js" crossorigin="anonymous"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js" crossorigin="anonymous"></script>
+  <!-- ✅ 더 안정적인 npm 경로로 변경 (gh 경로보다 404/차단 리스크 낮음) -->
+  <script defer src="https://cdn.jsdelivr.net/npm/pptxgenjs/dist/pptxgen.bundle.js" crossorigin="anonymous"></script>
 
   <script>
-    // ====== Formatter ======
-    const nf0 = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 0 });
-    const nf2 = new Intl.NumberFormat("ko-KR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const $ = (id) => document.getElementById(id);
+    // DOM + defer 스크립트 로딩 타이밍을 안전하게 맞추기 위해 DOMContentLoaded에서 시작
+    window.addEventListener("DOMContentLoaded", () => {
+      // ====== Formatter ======
+      const nf0 = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 0 });
+      const nf2 = new Intl.NumberFormat("ko-KR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const $ = (id) => document.getElementById(id);
 
-    function parseNumber(raw) {
-      if (raw === undefined || raw === null) return 0;
-      const cleaned = String(raw).replace(/,/g, "").replace(/[^0-9.]/g, "");
-      if (cleaned === "" || cleaned === ".") return 0;
-      const n = Number(cleaned);
-      return Number.isFinite(n) ? n : 0;
-    }
+      function parseNumber(raw) {
+        if (raw === undefined || raw === null) return 0;
+        const cleaned = String(raw).replace(/,/g, "").replace(/[^0-9.]/g, "");
+        if (cleaned === "" || cleaned === ".") return 0;
+        const n = Number(cleaned);
+        return Number.isFinite(n) ? n : 0;
+      }
+      function formatWithCommas(raw) {
+        if (raw === undefined || raw === null) return "";
+        const s = String(raw);
+        const cleaned = s.replace(/[^0-9.]/g, "");
+        if (cleaned === "") return "";
+        const parts = cleaned.split(".");
+        const intPart = parts[0] ? String(parseInt(parts[0], 10)) : "0";
+        const decPart = parts.length > 1 ? parts[1].slice(0, 6) : "";
+        const intFormatted = nf0.format(Number(intPart || 0));
+        return decPart.length ? `${intFormatted}.${decPart}` : intFormatted;
+      }
+      function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
 
-    function formatWithCommas(raw) {
-      if (raw === undefined || raw === null) return "";
-      const s = String(raw);
-      const cleaned = s.replace(/[^0-9.]/g, "");
-      if (cleaned === "") return "";
-      const parts = cleaned.split(".");
-      const intPart = parts[0] ? String(parseInt(parts[0], 10)) : "0";
-      const decPart = parts.length > 1 ? parts[1].slice(0, 6) : "";
-      const intFormatted = nf0.format(Number(intPart || 0));
-      return decPart.length ? `${intFormatted}.${decPart}` : intFormatted;
-    }
+      // ====== Defaults ======
+      const inputs = {
+        investmentRaw: "12,500,000",
+        oldCostRaw: "77",
+        newCostRaw: "64.5",
+        annualQtyRaw: "1,676,210",
+        monthsPerYearRaw: "12",
+        rampMonthsRaw: "0",
+        rampRateRaw: "0.67",
+        maxSimMonthsRaw: "120",
+        extraMonthlyCostRaw: "0"
+      };
 
-    function clamp(n, min, max) {
-      return Math.max(min, Math.min(max, n));
-    }
+      // ====== Elements ======
+      const investmentEl = $("investment");
+      const oldCostEl = $("oldCost");
+      const newCostEl = $("newCost");
+      const annualQtyEl = $("annualQty");
+      const monthsPerYearEl = $("monthsPerYear");
+      const rampMonthsEl = $("rampMonths");
+      const rampRateEl = $("rampRate");
+      const maxSimMonthsEl = $("maxSimMonths");
+      const extraMonthlyCostEl = $("extraMonthlyCost");
 
-    // ====== Defaults ======
-    const inputs = {
-      investmentRaw: "12,500,000",
-      oldCostRaw: "77",
-      newCostRaw: "64.5",
-      annualQtyRaw: "1,676,210",
-      monthsPerYearRaw: "12",
-      rampMonthsRaw: "0",
-      rampRateRaw: "0.67",
-      maxSimMonthsRaw: "120",
-      extraMonthlyCostRaw: "0"
-    };
+      function setInitial() {
+        investmentEl.value = inputs.investmentRaw;
+        oldCostEl.value = inputs.oldCostRaw;
+        newCostEl.value = inputs.newCostRaw;
+        annualQtyEl.value = inputs.annualQtyRaw;
+        monthsPerYearEl.value = inputs.monthsPerYearRaw;
+        rampMonthsEl.value = inputs.rampMonthsRaw;
+        rampRateEl.value = inputs.rampRateRaw;
+        maxSimMonthsEl.value = inputs.maxSimMonthsRaw;
+        extraMonthlyCostEl.value = inputs.extraMonthlyCostRaw;
+      }
 
-    // ====== Elements ======
-    const investmentEl = $("investment");
-    const oldCostEl = $("oldCost");
-    const newCostEl = $("newCost");
-    const annualQtyEl = $("annualQty");
-    const monthsPerYearEl = $("monthsPerYear");
-    const rampMonthsEl = $("rampMonths");
-    const rampRateEl = $("rampRate");
-    const maxSimMonthsEl = $("maxSimMonths");
-    const extraMonthlyCostEl = $("extraMonthlyCost");
-
-    function setInitial() {
-      investmentEl.value = inputs.investmentRaw;
-      oldCostEl.value = inputs.oldCostRaw;
-      newCostEl.value = inputs.newCostRaw;
-      annualQtyEl.value = inputs.annualQtyRaw;
-      monthsPerYearEl.value = inputs.monthsPerYearRaw;
-      rampMonthsEl.value = inputs.rampMonthsRaw;
-      rampRateEl.value = inputs.rampRateRaw;
-      maxSimMonthsEl.value = inputs.maxSimMonthsRaw;
-      extraMonthlyCostEl.value = inputs.extraMonthlyCostRaw;
-    }
-
-    function attachCommaInput(el) {
-      el.addEventListener("input", () => {
-        const cursorFromEnd = el.value.length - el.selectionStart;
-        el.value = formatWithCommas(el.value);
-        const newPos = Math.max(0, el.value.length - cursorFromEnd);
-        try { el.setSelectionRange(newPos, newPos); } catch {}
-        recalc();
-      });
-    }
-
-    // ====== Advanced toggle ======
-    const advToggle = $("advToggle");
-    const advBox = $("advBox");
-    const advArrow = $("advArrow");
-    advToggle.addEventListener("click", () => {
-      const show = !advBox.classList.contains("show");
-      advBox.classList.toggle("show", show);
-      advArrow.textContent = show ? "▲" : "▼";
-    });
-
-    // ====== Copy Summary ======
-    $("copyBtn").addEventListener("click", async () => {
-      const txt = $("summaryTxt").textContent || "";
-      try { await navigator.clipboard.writeText(txt); }
-      catch { alert("클립보드 복사에 실패했습니다. 브라우저 권한을 확인해주세요."); }
-    });
-
-    // ====== Chart ======
-    let chart;
-    function initChart() {
-      const ctx = document.getElementById("chart");
-      chart = new Chart(ctx, {
-        type: "line",
-        data: {
-          labels: [],
-          datasets: [
-            { label: "투자비 잔액(원)", data: [], borderColor: "#0f172a", borderWidth: 2, pointRadius: 0, tension: 0.25 },
-            { label: "누적 절감액(원)", data: [], borderColor: "#16a34a", borderWidth: 2, pointRadius: 0, tension: 0.25 }
-          ]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${nf0.format(c.raw)}` } },
-            legend: { display: true }
-          },
-          scales: { y: { ticks: { callback: (v) => nf0.format(v) } } }
-        }
-      });
-    }
-
-    // ====== Compute ======
-    function recalc() {
-      const investment = parseNumber(investmentEl.value);
-      const oldCost = parseNumber(oldCostEl.value);
-      const newCost = parseNumber(newCostEl.value);
-      const annualQty = parseNumber(annualQtyEl.value);
-
-      const monthsPerYear = clamp(parseInt(parseNumber(monthsPerYearEl.value), 10) || 12, 1, 24);
-      const rampMonths = clamp(parseInt(parseNumber(rampMonthsEl.value), 10) || 0, 0, 60);
-      const rampRate = clamp(parseNumber(rampRateEl.value) || 0, 0, 2);
-      const maxSimMonths = clamp(parseInt(parseNumber(maxSimMonthsEl.value), 10) || 120, 1, 600);
-      const extraMonthlyCost = parseNumber(extraMonthlyCostEl.value);
-
-      const unitSaving = oldCost - newCost;
-      const reductionRate = (oldCost > 0) ? ((oldCost - newCost) / oldCost) * 100 : null;
-      const monthlyBaseQty = monthsPerYear ? (annualQty / monthsPerYear) : 0;
-
-      const annualSaving = unitSaving * annualQty - extraMonthlyCost * monthsPerYear;
-      const monthlySavingBase = unitSaving * monthlyBaseQty - extraMonthlyCost;
-
-      const warnings = [];
-      if (investment <= 0) warnings.push("투자비(취득원가)가 0 이하입니다.");
-      if (annualQty <= 0) warnings.push("연간 소요량이 0 이하입니다.");
-      if (unitSaving <= 0) warnings.push("단가절감(기존-신규)이 0 이하입니다. (절감이 아니라 인상일 수 있음)");
-      if (extraMonthlyCost > 0 && annualSaving <= 0) warnings.push("추가 월 고정비를 반영하면 연간 순절감이 0 이하입니다.");
-
-      // ✅ 그래프 X축 = maxSimMonths (항상 M1~MmaxSimMonths)
-      let remaining = investment;
-      let cumSaving = 0;
-      let breakevenMonth = null;
-      const rows = [];
-
-      for (let m = 1; m <= maxSimMonths; m++) {
-        const qtyFactor = (rampMonths > 0 && m <= rampMonths) ? rampRate : 1;
-        const qty = monthlyBaseQty * qtyFactor;
-        const grossSaving = unitSaving * qty;
-        const netSaving = grossSaving - extraMonthlyCost;
-
-        cumSaving += netSaving;
-        remaining -= netSaving;
-
-        if (breakevenMonth === null && remaining <= 0) breakevenMonth = m;
-
-        rows.push({
-          month: m, label: "M" + m,
-          qty, grossSaving, extraMonthlyCost, netSaving, cumSaving,
-          remaining: Math.max(0, remaining)
+      function attachCommaInput(el) {
+        el.addEventListener("input", () => {
+          const cursorFromEnd = el.value.length - el.selectionStart;
+          el.value = formatWithCommas(el.value);
+          const newPos = Math.max(0, el.value.length - cursorFromEnd);
+          try { el.setSelectionRange(newPos, newPos); } catch {}
+          recalc();
         });
       }
 
-      if (breakevenMonth === null && investment > 0 && unitSaving > 0) {
-        warnings.push("설정된 최대 시뮬레이션 기간 내에 회수 완료가 되지 않습니다.");
-      }
-
-      const paybackMonths = breakevenMonth;
-      const paybackYears = paybackMonths ? (paybackMonths / 12) : null;
-      const breakEvenQty = unitSaving > 0 ? (investment / unitSaving) : null;
-
-      // 기존 단가 아래
-      $("diffLine").textContent =
-        `차이: ${nf2.format(unitSaving)} 원/EA | 인하율: ${reductionRate === null ? "-" : nf2.format(reductionRate) + "%"}`;
-
-      // KPI 카드
-      const kpiUnit = $("kpiUnit");
-      kpiUnit.classList.remove("good","bad");
-      kpiUnit.classList.add(unitSaving > 0 ? "good" : "bad");
-
-      $("unitSavingTxt").textContent = `${nf2.format(unitSaving)} 원/EA`;
-      $("unitSubTxt").textContent =
-        `= 기존 ${nf2.format(oldCost)} - 신규 ${nf2.format(newCost)} | 인하율 ${reductionRate === null ? "-" : nf2.format(reductionRate) + "%"}`;
-
-      $("monthlyQtyTxt").textContent = `${nf0.format(Math.round(monthlyBaseQty))} EA`;
-      $("monthlyQtySub").textContent = `연간물량 ÷ ${monthsPerYear}개월`;
-
-      const kpiMonth = $("kpiMonth");
-      kpiMonth.classList.remove("good","bad");
-      kpiMonth.classList.add(monthlySavingBase > 0 ? "good" : "bad");
-
-      $("monthlySavingTxt").textContent = `${nf0.format(Math.round(monthlySavingBase))} 원/월`;
-      $("monthlySavingSub").textContent =
-        extraMonthlyCost > 0 ? `고정비 ${nf0.format(extraMonthlyCost)}원/월 반영` : "고정비 0원 가정";
-
-      const kpiYear = $("kpiYear");
-      kpiYear.classList.remove("good","bad");
-      kpiYear.classList.add(annualSaving > 0 ? "good" : "bad");
-
-      $("annualSavingTxt").textContent = `${nf0.format(Math.round(annualSaving))} 원/년`;
-      $("annualSavingSub").textContent = `월 순절감 × ${monthsPerYear}개월`;
-
-      // 요약
-      $("pillInv").textContent = `투자비: ${nf0.format(investment)} 원`;
-      $("pillBEQ").textContent = `손익분기 수량: ${breakEvenQty ? nf0.format(Math.ceil(breakEvenQty)) + " EA" : "-"}`;
-      $("pillPayback").textContent =
-        `회수기간: ${paybackMonths ? (paybackMonths + " 개월") : "(미회수)"}${paybackYears ? " (" + nf2.format(paybackYears) + " 년)" : ""}`;
-
-      const rrTxt = (reductionRate === null) ? "-" : nf2.format(reductionRate) + "%";
-      const pmTxt = paybackMonths ? paybackMonths + "개월" : "(미회수)";
-      const beqTxt = breakEvenQty ? nf0.format(Math.ceil(breakEvenQty)) : "-";
-      $("summaryTxt").textContent =
-        `투자비 ${nf0.format(investment)}원 / 단위절감 ${nf2.format(unitSaving)}원 (${rrTxt} 인하) / 연간순절감 ${nf0.format(Math.round(annualSaving))}원 → 회수기간 ${pmTxt} (손익분기 수량: ${beqTxt}EA)`;
-
-      // 램프업 노트
-      const rampNote = $("rampNote");
-      if (rampMonths > 0) {
-        rampNote.style.display = "block";
-        rampNote.textContent = `* 초기 ${rampMonths}개월은 물량을 ${Math.round(rampRate * 100)}%로 적용했습니다.`;
-      } else {
-        rampNote.style.display = "none";
-      }
-
-      // 경고
-      const warnBox = $("warnBox");
-      const warnList = $("warnList");
-      warnList.innerHTML = "";
-      if (warnings.length) {
-        warnBox.style.display = "block";
-        warnings.forEach(w => {
-          const li = document.createElement("li");
-          li.textContent = w;
-          warnList.appendChild(li);
-        });
-      } else {
-        warnBox.style.display = "none";
-      }
-
-      // 테이블(24개월)
-      const tbody = $("tbody");
-      tbody.innerHTML = "";
-      rows.slice(0, 24).forEach(r => {
-        const tr = document.createElement("tr");
-        tr.innerHTML = `
-          <td><b>${r.label}</b></td>
-          <td>${nf0.format(Math.round(r.qty))}</td>
-          <td>${nf0.format(Math.round(r.grossSaving))}</td>
-          <td>${nf0.format(Math.round(r.extraMonthlyCost))}</td>
-          <td class="${r.netSaving >= 0 ? "pos" : "neg"}">${nf0.format(Math.round(r.netSaving))}</td>
-          <td>${nf0.format(Math.round(r.cumSaving))}</td>
-          <td>${nf0.format(Math.round(r.remaining))}</td>
-        `;
-        tbody.appendChild(tr);
+      // ====== Advanced toggle ======
+      const advToggle = $("advToggle");
+      const advBox = $("advBox");
+      const advArrow = $("advArrow");
+      advToggle.addEventListener("click", () => {
+        const show = !advBox.classList.contains("show");
+        advBox.classList.toggle("show", show);
+        advArrow.textContent = show ? "▲" : "▼";
       });
 
-      // 차트 업데이트 (labels 길이 = maxSimMonths)
-      if (chart) {
-        chart.data.labels = rows.map(r => r.label);
-        chart.data.datasets[0].data = rows.map(r => Math.round(r.remaining));
-        chart.data.datasets[1].data = rows.map(r => Math.round(r.cumSaving));
-        chart.update();
-      }
-    }
+      // ====== Copy Summary ======
+      $("copyBtn").addEventListener("click", async () => {
+        const txt = $("summaryTxt").textContent || "";
+        try { await navigator.clipboard.writeText(txt); }
+        catch { alert("클립보드 복사에 실패했습니다. 브라우저 권한을 확인해주세요."); }
+      });
 
-    // ====== PPT Export: 1 slide (화면 동일) ======
-    function fitToSlide(imgW, imgH, slideW, slideH){
-      const imgRatio = imgW / imgH;
-      const slideRatio = slideW / slideH;
-      let w, h, x, y;
-      if (imgRatio > slideRatio) {
-        // 이미지가 더 가로로 김 → 가로 맞추고 세로 중앙정렬
-        w = slideW;
-        h = slideW / imgRatio;
-        x = 0;
-        y = (slideH - h) / 2;
-      } else {
-        // 이미지가 더 세로로 김 → 세로 맞추고 가로 중앙정렬
-        h = slideH;
-        w = slideH * imgRatio;
-        y = 0;
-        x = (slideW - w) / 2;
-      }
-      return {x,y,w,h};
-    }
+      // ====== Chart ======
+      let chart;
+      function initChartSafe() {
+        const fallback = $("chartFallback");
+        const canvas = $("chart");
 
-    async function exportPptOneSlide() {
-      const btn = $("pptBtn");
-      const oldText = btn.textContent;
-
-      try {
-        recalc(); // 최신 값 반영
-
-        btn.disabled = true;
-        btn.textContent = "⏳ PPT 생성 중...";
-
-        // 캡처 영역
-        const el = document.getElementById("captureArea");
-
-        const canvas = await html2canvas(el, {
-          backgroundColor: getComputedStyle(document.body).backgroundColor || "#f8fafc",
-          scale: 2,
-          useCORS: true
-        });
-
-        const dataUrl = canvas.toDataURL("image/png", 1.0);
-
-        if (typeof PptxGenJS === "undefined") {
-          alert("PPT 라이브러리(PptxGenJS) 로딩 실패: 인터넷 또는 CDN을 확인하세요.");
+        if (typeof window.Chart === "undefined") {
+          // Chart.js 로딩 실패 시, 페이지가 죽지 않도록 안내만 표시
+          fallback.style.display = "flex";
+          canvas.style.display = "none";
+          chart = null;
           return;
         }
 
-        const pptx = new PptxGenJS();
-        pptx.layout = "LAYOUT_WIDE"; // 13.33 x 7.5
+        fallback.style.display = "none";
+        canvas.style.display = "block";
 
-        const slide = pptx.addSlide();
-        slide.background = { color: "FFFFFF" };
+        const ctx = canvas.getContext("2d");
+        chart = new Chart(ctx, {
+          type: "line",
+          data: {
+            labels: [],
+            datasets: [
+              { label: "투자비 잔액(원)", data: [], borderColor: "#0f172a", borderWidth: 2, pointRadius: 0, tension: 0.25 },
+              { label: "누적 절감액(원)", data: [], borderColor: "#16a34a", borderWidth: 2, pointRadius: 0, tension: 0.25 }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${nf0.format(c.raw)}` } },
+              legend: { display: true }
+            },
+            scales: { y: { ticks: { callback: (v) => nf0.format(v) } } }
+          }
+        });
+      }
 
-        // 이미지 비율 유지해서 슬라이드에 꽉 차게(Contain)
-        const slideW = 13.33, slideH = 7.5;
-        const pos = fitToSlide(canvas.width, canvas.height, slideW, slideH);
+      // ====== Compute ======
+      function recalc() {
+        const investment = parseNumber(investmentEl.value);
+        const oldCost = parseNumber(oldCostEl.value);
+        const newCost = parseNumber(newCostEl.value);
+        const annualQty = parseNumber(annualQtyEl.value);
 
-        slide.addImage({
-          data: dataUrl,
-          x: pos.x, y: pos.y, w: pos.w, h: pos.h
+        const monthsPerYear = clamp(parseInt(parseNumber(monthsPerYearEl.value), 10) || 12, 1, 24);
+        const rampMonths = clamp(parseInt(parseNumber(rampMonthsEl.value), 10) || 0, 0, 60);
+        const rampRate = clamp(parseNumber(rampRateEl.value) || 0, 0, 2);
+        const maxSimMonths = clamp(parseInt(parseNumber(maxSimMonthsEl.value), 10) || 120, 1, 600);
+        const extraMonthlyCost = parseNumber(extraMonthlyCostEl.value);
+
+        const unitSaving = oldCost - newCost;
+        const reductionRate = (oldCost > 0) ? ((oldCost - newCost) / oldCost) * 100 : null;
+        const monthlyBaseQty = monthsPerYear ? (annualQty / monthsPerYear) : 0;
+
+        const annualSaving = unitSaving * annualQty - extraMonthlyCost * monthsPerYear;
+        const monthlySavingBase = unitSaving * monthlyBaseQty - extraMonthlyCost;
+
+        const warnings = [];
+        if (investment <= 0) warnings.push("투자비(취득원가)가 0 이하입니다.");
+        if (annualQty <= 0) warnings.push("연간 소요량이 0 이하입니다.");
+        if (unitSaving <= 0) warnings.push("단가절감(기존-신규)이 0 이하입니다. (절감이 아니라 인상일 수 있음)");
+        if (extraMonthlyCost > 0 && annualSaving <= 0) warnings.push("추가 월 고정비를 반영하면 연간 순절감이 0 이하입니다.");
+
+        let remaining = investment;
+        let cumSaving = 0;
+        let breakevenMonth = null;
+        const rows = [];
+
+        for (let m = 1; m <= maxSimMonths; m++) {
+          const qtyFactor = (rampMonths > 0 && m <= rampMonths) ? rampRate : 1;
+          const qty = monthlyBaseQty * qtyFactor;
+          const grossSaving = unitSaving * qty;
+          const netSaving = grossSaving - extraMonthlyCost;
+
+          cumSaving += netSaving;
+          remaining -= netSaving;
+
+          if (breakevenMonth === null && remaining <= 0) breakevenMonth = m;
+
+          rows.push({
+            month: m, label: "M" + m,
+            qty, grossSaving, extraMonthlyCost, netSaving, cumSaving,
+            remaining: Math.max(0, remaining)
+          });
+        }
+
+        if (breakevenMonth === null && investment > 0 && unitSaving > 0) {
+          warnings.push("설정된 최대 시뮬레이션 기간 내에 회수 완료가 되지 않습니다.");
+        }
+
+        const paybackMonths = breakevenMonth;
+        const paybackYears = paybackMonths ? (paybackMonths / 12) : null;
+        const breakEvenQty = unitSaving > 0 ? (investment / unitSaving) : null;
+
+        $("diffLine").textContent =
+          `차이: ${nf2.format(unitSaving)} 원/EA | 인하율: ${reductionRate === null ? "-" : nf2.format(reductionRate) + "%"}`;
+
+        const kpiUnit = $("kpiUnit");
+        kpiUnit.classList.remove("good","bad");
+        kpiUnit.classList.add(unitSaving > 0 ? "good" : "bad");
+
+        $("unitSavingTxt").textContent = `${nf2.format(unitSaving)} 원/EA`;
+        $("unitSubTxt").textContent =
+          `= 기존 ${nf2.format(oldCost)} - 신규 ${nf2.format(newCost)} | 인하율 ${reductionRate === null ? "-" : nf2.format(reductionRate) + "%"}`;
+
+        $("monthlyQtyTxt").textContent = `${nf0.format(Math.round(monthlyBaseQty))} EA`;
+        $("monthlyQtySub").textContent = `연간물량 ÷ ${monthsPerYear}개월`;
+
+        const kpiMonth = $("kpiMonth");
+        kpiMonth.classList.remove("good","bad");
+        kpiMonth.classList.add(monthlySavingBase > 0 ? "good" : "bad");
+
+        $("monthlySavingTxt").textContent = `${nf0.format(Math.round(monthlySavingBase))} 원/월`;
+        $("monthlySavingSub").textContent =
+          extraMonthlyCost > 0 ? `고정비 ${nf0.format(extraMonthlyCost)}원/월 반영` : "고정비 0원 가정";
+
+        const kpiYear = $("kpiYear");
+        kpiYear.classList.remove("good","bad");
+        kpiYear.classList.add(annualSaving > 0 ? "good" : "bad");
+
+        $("annualSavingTxt").textContent = `${nf0.format(Math.round(annualSaving))} 원/년`;
+        $("annualSavingSub").textContent = `월 순절감 × ${monthsPerYear}개월`;
+
+        $("pillInv").textContent = `투자비: ${nf0.format(investment)} 원`;
+        $("pillBEQ").textContent = `손익분기 수량: ${breakEvenQty ? nf0.format(Math.ceil(breakEvenQty)) + " EA" : "-"}`;
+        $("pillPayback").textContent =
+          `회수기간: ${paybackMonths ? (paybackMonths + " 개월") : "(미회수)"}${paybackYears ? " (" + nf2.format(paybackYears) + " 년)" : ""}`;
+
+        const rrTxt = (reductionRate === null) ? "-" : nf2.format(reductionRate) + "%";
+        const pmTxt = paybackMonths ? paybackMonths + "개월" : "(미회수)";
+        const beqTxt = breakEvenQty ? nf0.format(Math.ceil(breakEvenQty)) : "-";
+        $("summaryTxt").textContent =
+          `투자비 ${nf0.format(investment)}원 / 단위절감 ${nf2.format(unitSaving)}원 (${rrTxt} 인하) / 연간순절감 ${nf0.format(Math.round(annualSaving))}원 → 회수기간 ${pmTxt} (손익분기 수량: ${beqTxt}EA)`;
+
+        const rampNote = $("rampNote");
+        if (rampMonths > 0) {
+          rampNote.style.display = "block";
+          rampNote.textContent = `* 초기 ${rampMonths}개월은 물량을 ${Math.round(rampRate * 100)}%로 적용했습니다.`;
+        } else {
+          rampNote.style.display = "none";
+        }
+
+        const warnBox = $("warnBox");
+        const warnList = $("warnList");
+        warnList.innerHTML = "";
+        if (warnings.length) {
+          warnBox.style.display = "block";
+          warnings.forEach(w => {
+            const li = document.createElement("li");
+            li.textContent = w;
+            warnList.appendChild(li);
+          });
+        } else {
+          warnBox.style.display = "none";
+        }
+
+        const tbody = $("tbody");
+        tbody.innerHTML = "";
+        rows.slice(0, 24).forEach(r => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td><b>${r.label}</b></td>
+            <td>${nf0.format(Math.round(r.qty))}</td>
+            <td>${nf0.format(Math.round(r.grossSaving))}</td>
+            <td>${nf0.format(Math.round(r.extraMonthlyCost))}</td>
+            <td class="${r.netSaving >= 0 ? "pos" : "neg"}">${nf0.format(Math.round(r.netSaving))}</td>
+            <td>${nf0.format(Math.round(r.cumSaving))}</td>
+            <td>${nf0.format(Math.round(r.remaining))}</td>
+          `;
+          tbody.appendChild(tr);
         });
 
-        const now = new Date();
-        const y = now.getFullYear();
-        const mo = String(now.getMonth() + 1).padStart(2, "0");
-        const d = String(now.getDate()).padStart(2, "0");
-        const fileName = `투자비회수_화면동일_1장_${y}${mo}${d}.pptx`;
-
-        await pptx.writeFile({ fileName });
-      } catch (e) {
-        console.error(e);
-        alert("PPT 내보내기에 실패했습니다. (콘솔 로그 확인)");
-      } finally {
-        btn.disabled = false;
-        btn.textContent = oldText;
+        // 차트 업데이트
+        if (chart) {
+          chart.data.labels = rows.map(r => r.label);
+          chart.data.datasets[0].data = rows.map(r => Math.round(r.remaining));
+          chart.data.datasets[1].data = rows.map(r => Math.round(r.cumSaving));
+          chart.update();
+        }
       }
-    }
 
-    $("pptBtn").addEventListener("click", exportPptOneSlide);
+      // ====== PPT Export: 1 slide (화면 동일) ======
+      function fitToSlide(imgW, imgH, slideW, slideH){
+        const imgRatio = imgW / imgH;
+        const slideRatio = slideW / slideH;
+        let w, h, x, y;
+        if (imgRatio > slideRatio) {
+          w = slideW;
+          h = slideW / imgRatio;
+          x = 0;
+          y = (slideH - h) / 2;
+        } else {
+          h = slideH;
+          w = slideH * imgRatio;
+          y = 0;
+          x = (slideW - w) / 2;
+        }
+        return {x,y,w,h};
+      }
 
-    // ====== Setup ======
-    setInitial();
+      async function exportPptOneSlide() {
+        const btn = $("pptBtn");
+        const oldText = btn.textContent;
 
-    attachCommaInput(investmentEl);
-    attachCommaInput(oldCostEl);
-    attachCommaInput(newCostEl);
-    attachCommaInput(annualQtyEl);
-    attachCommaInput(monthsPerYearEl);
-    attachCommaInput(rampMonthsEl);
-    attachCommaInput(rampRateEl);
-    attachCommaInput(maxSimMonthsEl);
-    attachCommaInput(extraMonthlyCostEl);
+        try {
+          recalc();
 
-    initChart();
-    recalc();
+          btn.disabled = true;
+          btn.textContent = "⏳ PPT 생성 중...";
+
+          // 라이브러리 체크(페이지 죽지 않게)
+          if (typeof window.html2canvas === "undefined") {
+            alert("html2canvas 로딩 실패: CDN 차단/인터넷 상태를 확인하세요.");
+            return;
+          }
+          if (typeof window.PptxGenJS === "undefined") {
+            alert("PptxGenJS 로딩 실패: CDN 차단/인터넷 상태를 확인하세요.");
+            return;
+          }
+
+          const el = document.getElementById("captureArea");
+          const canvas = await html2canvas(el, {
+            backgroundColor: getComputedStyle(document.body).backgroundColor || "#f8fafc",
+            scale: 2,
+            useCORS: true
+          });
+
+          const dataUrl = canvas.toDataURL("image/png", 1.0);
+
+          const pptx = new PptxGenJS();
+          pptx.layout = "LAYOUT_WIDE";
+
+          const slide = pptx.addSlide();
+          slide.background = { color: "FFFFFF" };
+
+          const slideW = 13.33, slideH = 7.5;
+          const pos = fitToSlide(canvas.width, canvas.height, slideW, slideH);
+
+          slide.addImage({ data: dataUrl, x: pos.x, y: pos.y, w: pos.w, h: pos.h });
+
+          const now = new Date();
+          const y = now.getFullYear();
+          const mo = String(now.getMonth() + 1).padStart(2, "0");
+          const d = String(now.getDate()).padStart(2, "0");
+          const fileName = `투자비회수_화면동일_1장_${y}${mo}${d}.pptx`;
+
+          await pptx.writeFile({ fileName });
+        } catch (e) {
+          console.error(e);
+          alert("PPT 내보내기에 실패했습니다. (콘솔 로그 확인)");
+        } finally {
+          btn.disabled = false;
+          btn.textContent = oldText;
+        }
+      }
+      $("pptBtn").addEventListener("click", exportPptOneSlide);
+
+      // ====== Setup ======
+      setInitial();
+      attachCommaInput(investmentEl);
+      attachCommaInput(oldCostEl);
+      attachCommaInput(newCostEl);
+      attachCommaInput(annualQtyEl);
+      attachCommaInput(monthsPerYearEl);
+      attachCommaInput(rampMonthsEl);
+      attachCommaInput(rampRateEl);
+      attachCommaInput(maxSimMonthsEl);
+      attachCommaInput(extraMonthlyCostEl);
+
+      // 외부 스크립트 로딩 지연을 감안해, 차트 초기화는 약간 늦춰도 안전
+      // (defer라 대부분 필요 없지만, 사내망에서 CDN 느린 경우 대비)
+      setTimeout(() => {
+        initChartSafe();
+        recalc();
+      }, 0);
+    });
   </script>
 </body>
 </html>
